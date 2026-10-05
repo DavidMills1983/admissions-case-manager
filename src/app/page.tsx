@@ -1,113 +1,167 @@
+import Link from "next/link";
 import { supabase } from "@/lib/supabase";
-import RequirementChecklist from "@/components/RequirementChecklist";
-
-const CASE_ID =
-  "11111111-1111-1111-1111-111111111111";
+import { getNextAction } from "@/lib/nextAction";
+import { formatDate } from "@/lib/dates";
 
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
-  const { data: admissionCase, error: caseError } =
+  const { data: admissionCases, error } =
     await supabase
       .from("admission_cases")
       .select("*")
-      .eq("id", CASE_ID)
-      .single();
+      .order("created_at", {
+        ascending: true,
+      });
 
-  if (caseError || !admissionCase) {
+  if (error) {
     return (
       <main className="p-8">
         <h1 className="text-2xl font-bold">
-          Could not load admissions case
+          Could not load admissions cases
         </h1>
 
         <p className="mt-4 text-red-600">
-          {caseError?.message}
+          {error.message}
         </p>
       </main>
     );
   }
 
-  const { data: child } = await supabase
-    .from("children")
-    .select("*")
-    .eq("id", admissionCase.child_id)
-    .single();
+  const casesWithDetails = await Promise.all(
+    (admissionCases ?? []).map(
+      async (admissionCase) => {
 
-  const { data: school } = await supabase
-    .from("schools")
-    .select("*")
-    .eq("id", admissionCase.school_id)
-    .single();
+        const [
+          childResult,
+          schoolResult,
+          requirementsResult,
+        ] = await Promise.all([
+          supabase
+            .from("children")
+            .select("*")
+            .eq(
+              "id",
+              admissionCase.child_id
+            )
+            .single(),
 
-  const { data: requirements } = await supabase
-    .from("requirements")
-    .select("*")
-    .eq("case_id", CASE_ID)
-    .order("title");
+          supabase
+            .from("schools")
+            .select("*")
+            .eq(
+              "id",
+              admissionCase.school_id
+            )
+            .single(),
 
-  const completed =
-    requirements?.filter(
-      (requirement) => requirement.status === "done"
-    ).length ?? 0;
+          supabase
+            .from("requirements")
+            .select("*")
+            .eq(
+              "case_id",
+              admissionCase.id
+            )
+            .order("due_date", {
+              ascending: true,
+              nullsFirst: false,
+            }),
+        ]);
 
-  const total = requirements?.length ?? 0;
+        return {
+          admissionCase,
+          child: childResult.data,
+          school: schoolResult.data,
+          requirements:
+            requirementsResult.data ?? [],
+        };
+      }
+    )
+  );
 
   return (
-    <main className="min-h-screen bg-slate-50 p-8">
-      <div className="mx-auto max-w-4xl">
-        <h1 className="text-3xl font-bold text-slate-900">
-          Admissions Case Manager
-        </h1>
+    <main className="mx-auto max-w-4xl p-8">
+      <h1 className="text-3xl font-bold">
+        Admissions cases
+      </h1>
 
-        <div className="mt-8 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-          <p className="text-sm font-medium text-slate-500">
-            ADMISSIONS CASE
-          </p>
+      <p className="mt-2 text-gray-600">
+        Track applications, deadlines and next actions.
+      </p>
 
-          <h2 className="mt-2 text-2xl font-semibold text-slate-900">
-            {child?.name}
-          </h2>
+      <div className="mt-8 space-y-4">
+        {casesWithDetails.map(
+          ({
+            admissionCase,
+            child,
+            school,
+            requirements,
+          }) => {
 
-          <p className="mt-1 text-slate-600">
-            Secondary school entry: September{" "}
-            {child?.entry_year}
-          </p>
+            const nextAction =
+              getNextAction(requirements);
 
-          <div className="mt-6 border-t border-slate-200 pt-6">
-            <h3 className="text-xl font-semibold text-slate-900">
-              {school?.name}
-            </h3>
+            return (
+              <Link
+                key={admissionCase.id}
+                href={`/cases/${admissionCase.id}`}
+                className="block rounded-xl border p-6 transition hover:bg-gray-50"
+              >
+                <div className="flex items-start justify-between gap-6">
+                  <div>
+                    <h2 className="text-xl font-semibold">
+                      {school?.name ??
+                        "Unknown school"}
+                    </h2>
 
-            <p className="mt-2 text-sm text-slate-500">
-              Status
-            </p>
+                    <p className="mt-1 text-sm text-gray-500">
+                      {child?.name ??
+                        "Unknown child"}
+                    </p>
+                  </div>
 
-            <p className="font-medium capitalize text-slate-900">
-              {admissionCase.status}
-            </p>
+                  <span className="rounded-full bg-gray-100 px-3 py-1 text-sm">
+                    {admissionCase.status}
+                  </span>
+                </div>
 
-            <p className="mt-4 text-sm text-slate-600">
-              Progress: {completed} / {total} complete
-            </p>
+                <div className="mt-5 rounded-lg bg-blue-50 p-4">
+                  <p className="text-sm font-semibold text-blue-800">
+                    {nextAction.label}
+                  </p>
 
-            <div className="mt-6">
-              <h4 className="font-semibold text-slate-900">
-                Requirements
-              </h4>
+                  {nextAction.requirement ? (
+                    <>
+                      <p className="mt-1 font-medium">
+                        {
+                          nextAction
+                            .requirement.title
+                        }
+                      </p>
 
-              <RequirementChecklist
-              initialRequirements={
-                requirements?.map((requirement) => ({
-                  id: requirement.id,
-                  title: requirement.title,
-                  status: requirement.status as "todo" | "done",
-                })) ?? []
-              }
-            />
-            </div>
-          </div>
-        </div>
+                      <p className="mt-1 text-sm text-gray-600">
+                        {nextAction.message}
+                      </p>
+
+                      <p className="mt-1 text-sm text-gray-500">
+                        Deadline:{" "}
+                        {formatDate(
+                          nextAction
+                            .requirement
+                            .due_date
+                        )}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="mt-1 text-sm text-gray-600">
+                      {nextAction.message}
+                    </p>
+                  )}
+                </div>
+              </Link>
+            );
+          }
+        )}
       </div>
     </main>
   );
